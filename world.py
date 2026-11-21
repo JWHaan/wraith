@@ -134,16 +134,22 @@ class World:
         INF = 1e9
         dist = [INF] * (self.cnx * self.cny)
         q = deque()
-        r2 = gr * gr
-        ci0 = int((gx - gr - self.x0) / self.ccell); ci1 = int((gx + gr - self.x0) / self.ccell) + 1
-        cj0 = int((gy - gr - self.y0) / self.ccell); cj1 = int((gy + gr - self.y0) / self.ccell) + 1
+        cc, cnx = self.ccell, self.cnx
+        cj0 = int((gy - gr - self.y0) / cc); cj1 = int((gy + gr - self.y0) / cc) + 1
         for cj in range(max(0, cj0), min(self.cny, cj1 + 1)):
-            for ci in range(max(0, ci0), min(self.cnx, ci1 + 1)):
-                k = cj * self.cnx + ci
-                cx, cy = self.ccenter(k)
-                if (cx - gx) ** 2 + (cy - gy) ** 2 <= r2:
-                    dist[k] = 0.0
-                    q.append(k)
+            cy = self.y0 + (cj + 0.5) * cc
+            h2 = gr * gr - (cy - gy) ** 2
+            if h2 < 0:
+                continue
+            h = math.sqrt(h2)
+            i0 = max(0, int(math.ceil((gx - h - self.x0) / cc - 0.5)))
+            i1 = min(cnx - 1, int(math.floor((gx + h - self.x0) / cc - 0.5)))
+            if i1 < i0:
+                continue
+            row = cj * cnx
+            for k in range(row + i0, row + i1 + 1):
+                dist[k] = 0.0
+            q.extend(range(row + i0, row + i1 + 1))
         if not q:
             k = self.cidx(gx, gy)
             dist[k] = 0.0

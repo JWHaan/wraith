@@ -9,10 +9,10 @@ import mechfight as mf
 from world import World
 
 TAU = 2 * math.pi
-UPGRADE_PRIORITY = ["armor", "plating", "nanites", "gun_damage", "gun_rate", "lightning_efficiency",
-                    "laser_damage", "laser_charge", "lightning_range", "gun_mag", "sensors", "servos",
-                    "capacitor", "reactor", "jets", "gun_velocity", "gyros", "lightning_chain",
-                    "mortar_reload", "mortar_splash", "mortar_velocity", "laser_pierce"]
+UPGRADE_PRIORITY = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate",
+                    "laser_charge", "gun_damage", "capacitor", "reactor", "gyros", "lightning_range",
+                    "gun_mag", "sensors", "gun_velocity", "servos", "jets", "lightning_chain", "laser_pierce",
+                    "mortar_reload", "mortar_velocity", "mortar_splash"]
 import os
 WEAPON_PREF = {"laser": 3, "lightning": 2, "gun": 0, "mortar": -5}
 if os.environ.get("WRAITH_PREF") == "lightning":
@@ -20,6 +20,8 @@ if os.environ.get("WRAITH_PREF") == "lightning":
 FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
 FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
 FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
+LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
+V4 = os.environ.get("WRAITH_V4", "1") == "1"
 STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
 SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
 
@@ -168,27 +170,11 @@ class Bot:
         engaged = len(visible_mechs) > 0 or (t - self.last_dmg_t < 3)
         urgent = pressing
 
-        if pressing:
-            mode = "zone"
-        elif near_threats and (engaged or near_threats[0][2] < 6):
-            # decide fight or flight
-            strong = sum(1 for m, p, age in near_threats if age < 3)
-            tgt = near_threats[0][0]
-            their_hp = tgt.get("hp", 1400)
-            finish = their_hp < 0.3 * tgt.get("max_hp", 1400) and hp_frac > 0.3 and strong <= 2
-            dtgt = math.dist(near_threats[0][1][:2], (x, y))
-            if self.ffa:
-                ok = strong <= 1 and hp_frac > 0.6 and their_hp <= me["hp"] * 0.9 and (dtgt < 70 or t - self.last_dmg_t < 2)
-            else:
-                ok = strong <= FIGHT_N and hp_frac > FIGHT_HP and their_hp <= me["hp"] * 1.15
-            if finish or ok:
-                mode = "fight"
-            else:
-                mode = "evade"
-        elif rotating:
-            mode = "zone"
+        if V4:
+            mode, extra = self.decide_v4(me, obs, mechs, near_threats, sc, sr, t, pressing, rotating, hp_frac)
         else:
-            mode = "loot"
+            extra = None
+            mode = self.decide_v3(me, near_threats, engaged, pressing, rotating, hp_frac, t)
 
         # build target selection for shooting regardless of mode
         target = self.pick_target(me, mechs, npcs, obs, mode)
@@ -204,7 +190,13 @@ class Bot:
         elif mode == "evade":
             move, boost = self.evade_move(me, near_threats, sc, sr, t)
         elif mode == "fight":
-            move, boost = self.fight_move(me, near_threats[0][1], target, sc, sr, t)
+            tp = target[1]["pos"] if target and target[0] == "mech" else near_threats[0][1]
+            move, boost = self.fight_move(me, tp, target, sc, sr, t)
+        elif mode in ("cube", "arm"):
+            gp = extra
+            move = self.walk_to(me, gp)
+            d = math.dist(gp[:2], (x, y))
+            boost = d > 40 and me["energy"] > 50 and not near_threats
         else:
             move, speed = self.loot_move(me, obs, sc, sr, t, target)
 
@@ -276,6 +268,109 @@ class Bot:
         self.world.step_flow(max(0.0, 0.012 - used))
         mf.draw.label(f"{'F' if self.ffa else 'P'} {mode} hp{me['hp']:.0f} thr{len(near_threats)}")
         return act
+
+    # ------------------------------------------------------------------ decisions
+    def decide_v3(self, me, near_threats, engaged, pressing, rotating, hp_frac, t):
+        x, y, _ = me["pos"]
+        if pressing:
+            return "zone"
+        if near_threats and (engaged or near_threats[0][2] < 6):
+            strong = sum(1 for m, p, age in near_threats if age < 3)
+            tgt = near_threats[0][0]
+            their_hp = tgt.get("hp", 1400)
+            finish = their_hp < 0.3 * tgt.get("max_hp", 1400) and hp_frac > 0.3 and strong <= 2
+            dtgt = math.dist(near_threats[0][1][:2], (x, y))
+            if self.ffa:
+                ok = strong <= 1 and hp_frac > 0.6 and their_hp <= me["hp"] * 0.9 and (dtgt < 70 or t - self.last_dmg_t < 2)
+            else:
+                ok = strong <= FIGHT_N and hp_frac > FIGHT_HP and their_hp <= me["hp"] * 1.15
+            return "fight" if (finish or ok) else "evade"
+        if rotating:
+            return "zone"
+        return "loot"
+
+    def update_pick_mem(self, obs, x, y, z, t):
+        if not hasattr(self, "pick_mem"):
+            self.pick_mem, self.cube_mem2 = {}, {}
+        vis = {p["id"] for p in obs.get("pickups", [])}
+        for p in obs.get("pickups", []):
+            self.pick_mem[p["id"]] = (p["kind"], p["pos"], t)
+        self.pick_mem = {k: v for k, v in self.pick_mem.items()
+                         if t - v[2] < 120 and (k in vis or math.dist(v[1][:2], (x, y)) > 15)}
+        cv = {c["id"] for c in obs.get("cubes", [])}
+        for c in obs.get("cubes", []):
+            self.cube_mem2[c["id"]] = (c["pos"], t)
+        self.cube_mem2 = {k: v for k, v in self.cube_mem2.items()
+                          if t - v[1] < 30 and (k in cv or math.dist(v[0][:2], (x, y)) > 15)}
+
+    def decide_v4(self, me, obs, mechs, near_threats, sc, sr, t, pressing, rotating, hp_frac):
+        x, y, z = me["pos"]
+        self.update_pick_mem(obs, x, y, z, t)
+        held = [w["kind"] if w else None for w in me["weapons"]]
+        has_laser, has_light = "laser" in held, "lightning" in held
+        armed = has_laser or has_light
+        # weapon we want
+        want_pick = None
+        for pid, (kind, pos, _) in self.pick_mem.items():
+            if kind not in ("laser", "lightning") or kind in held or abs(pos[2] - z) > 25:
+                continue
+            d = math.dist(pos[:2], (x, y))
+            if d > (240 if not armed else 160):
+                continue
+            if not self.in_circle(pos[0], pos[1], sc, sr + 25) and d > 30:
+                continue
+            if want_pick is None or d < want_pick[1]:
+                want_pick = (pos, d)
+        want_cube = None
+        for cid, (pos, _) in self.cube_mem2.items():
+            d = math.dist(pos[:2], (x, y))
+            if d < 70 and abs(pos[2] - z) < 4 and self.in_circle(pos[0], pos[1], sc, sr + 20):
+                if want_cube is None or d < want_cube[1]:
+                    want_cube = (pos, d)
+        # damage taken recently
+        if not hasattr(self, "dmg_hist"):
+            self.dmg_hist = []
+        for ev in obs.get("events", []):
+            if ev["type"] == "damaged" and ev.get("weapon") != "zone":
+                self.dmg_hist.append((t, ev["amount"]))
+        self.dmg_hist = [d for d in self.dmg_hist if t - d[0] < 2.0]
+        dmg_recent = sum(a for _, a in self.dmg_hist)
+        real = [q for q in near_threats if q[2] < 3]
+        # visible shootable target
+        tv, td = None, 1e9
+        for m in mechs:
+            d = math.dist(m["pos"][:2], (x, y))
+            if d < td and d < 285:
+                tv, td = m, d
+        if hp_frac < 0.38 and near_threats:
+            self.retreating = True
+        if getattr(self, "retreating", False) and (hp_frac > 0.8 or (t - self.last_dmg_t > 12 and hp_frac > 0.6)):
+            self.retreating = False
+        weak = tv is not None and tv.get("hp", 1400) <= 0.3 * tv.get("max_hp", 1400)
+        finishing = weak and td < 130 and hp_frac > 0.3 and len(real) <= 2
+        close_fight = (tv is not None and td < 40 and (has_light or hp_frac > 0.5)) or finishing
+        many = len(real) >= 3 or (len(real) >= 2 and hp_frac < 0.6) or dmg_recent > 220
+        outranged = (not has_laser) and any("laser" in (q[0].get("weapons") or []) and
+                                            math.dist(q[1][:2], (x, y)) > 70 for q in real)
+        if self.ffa and tv is not None and not finishing:
+            # free-for-all: only take clean fights
+            if not (len(real) <= 1 and hp_frac > 0.6 and (td < 70 or t - self.last_dmg_t < 2)):
+                many = True
+        if pressing:
+            return "zone", None
+        if (getattr(self, "retreating", False) or many or outranged) and not close_fight and near_threats:
+            return "evade", None
+        if rotating:
+            return "zone", None
+        if want_cube and hp_frac > 0.35 and len(real) <= 1 and (want_cube[1] < 10 or tv is None or td > 60):
+            return "cube", want_cube[0]
+        if want_pick and not armed and t - self.last_dmg_t > 1.5 and (tv is None or td > 50 or want_pick[1] < 20):
+            return "arm", want_pick[0]
+        if tv is not None:
+            return "fight", None
+        if want_pick:
+            return "arm", want_pick[0]
+        return "loot", None
 
     # ------------------------------------------------------------------ targeting
     def pick_target(self, me, mechs, npcs, obs, mode):
@@ -353,7 +448,19 @@ class Bot:
         perr = abs(me["aim"][1] - pitch)
         tol = math.atan2(2.2, max(dh, 1)) + 0.01
         clear = self.world.los(src, pt)
-        visible = kind != "mech" or m.get("t", t) >= t - 0.01 or True
+        # laser is hitscan: when it is nearly charged, aim at where the target is now (tiny lead only)
+        if LASER_FIX:
+            for w in weapons:
+                if w and w["kind"] == "laser" and (w.get("charge") or 0) >= w["stats"]["charge"] * 0.85 and kind != "crate":
+                    v = m.get("vel", [0, 0, 0])
+                    lp = (m["pos"][0] + v[0] * 0.1, m["pos"][1] + v[1] * 0.1, m["pos"][2] + zoff)
+                    ldx, ldy, ldz = lp[0] - src[0], lp[1] - src[1], lp[2] - src[2]
+                    yaw = math.atan2(ldy, ldx)
+                    pitch = math.atan2(ldz, math.hypot(ldx, ldy))
+                    aim = [yaw, pitch]
+                    err = abs(angdiff(me["aim"][0], yaw))
+                    perr = abs(me["aim"][1] - pitch)
+                    tol = math.atan2(1.8, max(dh, 1)) + 0.005
         # gun (slot 0 or whatever slot holds it)
         for si, w in enumerate(weapons):
             if not w:
@@ -373,7 +480,7 @@ class Bot:
                     continue
                 if charge > 0:
                     # hold until full and on target, then release
-                    if charge >= full * 0.98 and err < tol and clear:
+                    if charge >= full * 0.98 and err < tol and (not LASER_FIX or perr < tol * 1.5 + 0.01) and clear:
                         fire[si] = False
                     else:
                         fire[si] = True
@@ -488,7 +595,14 @@ class Bot:
         x, y, z = me["pos"]
         d = math.dist(tp[:2], (x, y))
         has_ltg = any(w and w["kind"] == "lightning" for w in me["weapons"])
+        has_las = any(w and w["kind"] == "laser" for w in me["weapons"])
         want = 32 if has_ltg else FIGHT_RANGE
+        if V4:
+            want = 110 if has_las else (28 if has_ltg else FIGHT_RANGE)
+            if has_las and has_ltg and d < 60:
+                want = 28
+            if target and target[0] == "mech" and target[1].get("hp", 1400) <= 0.3 * target[1].get("max_hp", 1400):
+                want = 28 if has_ltg else 55
         ax, ay = norm2(tp[0] - x, tp[1] - y)
         sx, sy = self.strafe(me, tp, t)
         if d > want + 15:
@@ -630,6 +744,22 @@ class Bot:
             pref = WEAPON_PREF.get(p["kind"], -1)
             if pref > cur_pref and (best is None or pref > WEAPON_PREF[best["kind"]]):
                 best = p
+        if V4:
+            # loadout goal laser + lightning: fill an empty slot, else replace the gun or a mortar
+            weapons = me["weapons"]
+            for p in obs.get("pickups", []):
+                if p["kind"] not in ("laser", "lightning") or p["kind"] in held:
+                    continue
+                if math.dist(p["pos"][:2], (x, y)) > reach - 0.3 or abs(p["pos"][2] - z) > 3.8:
+                    continue
+                if None in weapons:
+                    return {"take": p["id"]}
+                for si, w in enumerate(weapons):
+                    if w and w["kind"] in ("mortar", "gun"):
+                        if w["kind"] == "gun" and any(o and o["kind"] == "mortar" for o in weapons):
+                            continue  # drop the mortar first
+                        return {"take": p["id"], "drop": si}
+            return None
         if not best:
             return None
         if cur is None:
