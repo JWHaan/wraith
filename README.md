@@ -1,4 +1,4 @@
-# survivor — Mech Royale bot
+# wraith — Mech Royale bot
 
 Survival-first mech AI for the Builders Buildathon Mech Royale track (protocol mechfight/1).
 

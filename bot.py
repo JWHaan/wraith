@@ -25,7 +25,7 @@ def norm2(x, y):
 
 
 class Bot:
-    name = "survivor"
+    name = "wraith"
 
     def __init__(self, hello):
         self.cfg = hello["config"]
