@@ -21,7 +21,7 @@ FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
 FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
 FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
 LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
-F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst").split(",") if x)  # experiment switches
+F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst,laser2").split(",") if x)  # experiment switches
 V4 = os.environ.get("WRAITH_V4", "1") == "1"
 STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
 SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
@@ -471,7 +471,10 @@ class Bot:
                     bearing = base + 0.9 * math.sin(t * 1.3)
                 else:
                     bearing = (t * 1.1) % TAU
-            # keep charging laser off
+            if "laser2" in F:
+                for si, w in enumerate(weapons):
+                    if w and w["kind"] == "laser" and (w.get("charge") or 0) > 0:
+                        fire[si] = bool(self.mem) and (w.get("charge") or 0) < w["stats"]["charge"] + 1.5
             return [bearing, 0.0], fire
         kind, m = target
         zoff = 3.0 if kind == "npc" else (0.5 if kind == "crate" else 4.5 * (1 + 0.05 * m.get("cubes", 0)))
@@ -525,7 +528,8 @@ class Bot:
                         fire[si] = False
                     else:
                         fire[si] = True
-                elif w["cooldown"] <= 0 and dh < st["range"] and clear and err < 0.35 and kind == "mech":
+                elif w["cooldown"] <= 0.05 and dh < st["range"] - 5 and kind in ("mech", "npc") and \
+                        ("laser2" in F or (clear and err < 0.35 and kind == "mech")):
                     fire[si] = True
             elif k == "mortar":
                 if kind == "mech" and 35 < dh < 220 and w["cooldown"] <= 0:
