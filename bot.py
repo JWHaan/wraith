@@ -17,6 +17,10 @@ import os
 WEAPON_PREF = {"laser": 3, "lightning": 2, "gun": 0, "mortar": -5}
 if os.environ.get("WRAITH_PREF") == "lightning":
     WEAPON_PREF = {"lightning": 3, "laser": 2, "gun": 0, "mortar": -5}
+FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
+FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
+FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
+STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
 SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
 
 
@@ -176,7 +180,7 @@ class Bot:
             if self.ffa:
                 ok = strong <= 1 and hp_frac > 0.6 and their_hp <= me["hp"] * 0.9 and (dtgt < 70 or t - self.last_dmg_t < 2)
             else:
-                ok = strong <= 1 and hp_frac > 0.45 and their_hp <= me["hp"] * 1.15
+                ok = strong <= FIGHT_N and hp_frac > FIGHT_HP and their_hp <= me["hp"] * 1.15
             if finish or ok:
                 mode = "fight"
             else:
@@ -282,9 +286,16 @@ class Bot:
             if d > 230:
                 continue
             s = d + m.get("hp", 1400) * 0.05
+            if STICKY:
+                s = d * 0.6 + m.get("hp", 1400) * 0.08
+                if m["id"] == getattr(self, "last_target", None):
+                    s -= 40
+                if not self.world.los((x, y, z + me["stats"].get("muzzle_height", 7)), (m["pos"][0], m["pos"][1], m["pos"][2] + 4.5)):
+                    s += 60
             if s < bs:
                 bs, best = s, ("mech", m)
         if best:
+            self.last_target = best[1]["id"]
             return best
         if mode == "loot" and me["hp"] / me["max_hp"] > 0.6:
             for m in npcs:
@@ -477,7 +488,7 @@ class Bot:
         x, y, z = me["pos"]
         d = math.dist(tp[:2], (x, y))
         has_ltg = any(w and w["kind"] == "lightning" for w in me["weapons"])
-        want = 32 if has_ltg else 70
+        want = 32 if has_ltg else FIGHT_RANGE
         ax, ay = norm2(tp[0] - x, tp[1] - y)
         sx, sy = self.strafe(me, tp, t)
         if d > want + 15:
