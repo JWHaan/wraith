@@ -1,4 +1,5 @@
 """Survival-first mech bot: stay in the zone, stay out of sight, fight facing the threat, loot when quiet."""
+import gc
 import math
 import random
 import sys
@@ -12,7 +13,11 @@ UPGRADE_PRIORITY = ["armor", "plating", "nanites", "gun_damage", "gun_rate", "li
                     "laser_damage", "laser_charge", "lightning_range", "gun_mag", "sensors", "servos",
                     "capacitor", "reactor", "jets", "gun_velocity", "gyros", "lightning_chain",
                     "mortar_reload", "mortar_splash", "mortar_velocity", "laser_pierce"]
-WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": 1, "gun": 0}
+import os
+WEAPON_PREF = {"laser": 3, "lightning": 2, "gun": 0, "mortar": -5}
+if os.environ.get("WRAITH_PREF") == "lightning":
+    WEAPON_PREF = {"lightning": 3, "laser": 2, "gun": 0, "mortar": -5}
+SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
 
 
 def angdiff(a, b):
@@ -46,6 +51,12 @@ class Bot:
         self.last_dmg_t = -99
         self.crate_target = None
         self.mode = "start"
+        self.kills = 0
+        self.ffa = False
+        self.t0 = 0.0
+        gc.collect()
+        gc.freeze()
+        gc.set_threshold(50000, 50, 100)
 
     # ------------------------------------------------------------------ helpers
     def zone_now(self, z, t):
@@ -77,6 +88,7 @@ class Bot:
     # ------------------------------------------------------------------ main
     def act(self, obs):
         t0 = time.perf_counter()
+        self.t0 = t0
         me = obs["self"]
         t = obs["t"]
         x, y, z = me["pos"]
@@ -94,6 +106,8 @@ class Bot:
 
         # --- events / memory
         for ev in obs.get("events", []):
+            if ev["type"] == "kill":
+                self.kills += 1
             if ev["type"] == "damaged":
                 self.last_dmg_t = t
                 if ev.get("bearing") is not None and ev.get("weapon") != "zone":
@@ -104,6 +118,10 @@ class Bot:
                 self.threat_dirs.append((t, s["bearing"], w))
         self.threat_dirs = [d for d in self.threat_dirs if t - d[0] < 4.0][-30:]
 
+        # free-for-all detector: house bots in practice only die to us (Kgc3105/niranjankumarnk idea)
+        unexplained = (self.cfg["match"]["mechs"] - obs["alive"]) - self.kills
+        if unexplained >= 2 or (unexplained >= 1 and t < 60):
+            self.ffa = True
         mechs = [m for m in obs["mechs"] if m["kind"] == "mech"]
         npcs = [m for m in obs["mechs"] if m["kind"] == "npc"]
         for m in mechs:
@@ -126,9 +144,17 @@ class Bot:
         self.ensure_flow(sc, sr, t)
         in_safe = self.in_circle(x, y, sc, sr)
         out_zone = not me["in_zone"]
-        # time until current shrinking edge reaches us (rough)
+        # rotate early and commit until we're inside the next circle (moonriver/Lance idea)
         z = obs["zone"]
-        urgent = out_zone or (not in_safe and t > z["shrink_start"] - 20)
+        gap = max(0.0, math.dist((x, y), sc) - sr)
+        travel = gap / (me["stats"].get("walk_speed", 11.7) * 0.75) + 6
+        t_left = z["shrink_start"] - t
+        if in_safe:
+            self.rotating = None
+        elif t_left < travel + 35:
+            self.rotating = sc  # stays committed until we are inside
+        rotating = getattr(self, "rotating", None) is not None
+        pressing = out_zone or (rotating and t_left < travel + 8)
 
         # --- choose movement goal
         goal = None
@@ -136,18 +162,27 @@ class Bot:
         speed = 1.0
         visible_mechs = [m for m in mechs]
         engaged = len(visible_mechs) > 0 or (t - self.last_dmg_t < 3)
+        urgent = pressing
 
-        if urgent:
+        if pressing:
             mode = "zone"
         elif near_threats and (engaged or near_threats[0][2] < 6):
             # decide fight or flight
             strong = sum(1 for m, p, age in near_threats if age < 3)
             tgt = near_threats[0][0]
             their_hp = tgt.get("hp", 1400)
-            if strong <= 1 and hp_frac > 0.45 and their_hp <= me["hp"] * 1.15:
+            finish = their_hp < 0.3 * tgt.get("max_hp", 1400) and hp_frac > 0.3 and strong <= 2
+            dtgt = math.dist(near_threats[0][1][:2], (x, y))
+            if self.ffa:
+                ok = strong <= 1 and hp_frac > 0.6 and their_hp <= me["hp"] * 0.9 and (dtgt < 70 or t - self.last_dmg_t < 2)
+            else:
+                ok = strong <= 1 and hp_frac > 0.45 and their_hp <= me["hp"] * 1.15
+            if finish or ok:
                 mode = "fight"
             else:
                 mode = "evade"
+        elif rotating:
+            mode = "zone"
         else:
             mode = "loot"
 
@@ -161,7 +196,7 @@ class Bot:
             if d is None:
                 d = norm2(sc[0] - x, sc[1] - y)
             move = d
-            boost = me["energy"] > 25 or out_zone
+            boost = (me["energy"] > 55 and pressing) or out_zone
         elif mode == "evade":
             move, boost = self.evade_move(me, near_threats, sc, sr, t)
         elif mode == "fight":
@@ -188,13 +223,20 @@ class Bot:
             self.stuck_t += 0.1
         else:
             self.stuck_t = max(0.0, self.stuck_t - 0.05)
-        if self.stuck_t > 0.4 and me["energy"] > 30:
-            jump = True
-            self.climb_until = t + 2.5
+        if self.stuck_t > 0.4:
             self.stuck_t = 0
-            # wiggle a little to unstick from corners
-            a = math.atan2(move[1], move[0]) + self.rng.uniform(-0.6, 0.6)
+            if me["energy"] > 22:
+                jump = True
+                self.climb_until = t + 2.5
+                a = math.atan2(move[1], move[0]) + self.rng.uniform(-0.6, 0.6)
+            else:
+                # not enough energy to climb: slide along the wall for a second
+                a = math.atan2(move[1], move[0]) + self.rng.choice((-1.4, 1.4))
+                self.slide = (t + 1.0, a)
             move = (math.cos(a), math.sin(a))
+        sl = getattr(self, "slide", None)
+        if sl and t < sl[0] and t >= self.climb_until:
+            move = (math.cos(sl[1]), math.sin(sl[1]))
         if t < self.climb_until and not me["grounded"]:
             boost = me["energy"] > 3
         elif t < self.climb_until and me["grounded"]:
@@ -214,7 +256,12 @@ class Bot:
         if tk:
             act.update(tk)
 
-        # laser charging slows us; that's fine
+        # sneak: below step_speed no footstep sound (Lance's `sneak`)
+        heard = any(t - d[0] < 3 for d in self.threat_dirs)
+        if SNEAK and mode == "loot" and (near_threats or heard) and t - self.last_dmg_t > 4:
+            quiet = (self.cfg["sound"]["step_speed"] - 0.4) / max(1.0, me["stats"].get("walk_speed", 11.7))
+            speed = min(speed, quiet)
+            boost = False
         act["move"] = [move[0] * speed, move[1] * speed]
         act["boost"] = bool(boost)
         act["jump"] = jump
@@ -222,8 +269,8 @@ class Bot:
 
         # spend leftover budget on the flow field
         used = time.perf_counter() - t0
-        self.world.step_flow(max(0.0, 0.015 - used))
-        mf.draw.label(f"{mode} hp{me['hp']:.0f} thr{len(near_threats)}")
+        self.world.step_flow(max(0.0, 0.012 - used))
+        mf.draw.label(f"{'F' if self.ffa else 'P'} {mode} hp{me['hp']:.0f} thr{len(near_threats)}")
         return act
 
     # ------------------------------------------------------------------ targeting
@@ -388,6 +435,8 @@ class Bot:
         ths = [(p, m) for m, p, age in threats[:4]]
         best, bs = None, -1e18
         for ring in (12, 24, 40, 60):
+            if time.perf_counter() - self.t0 > 0.018:
+                break
             n = 12
             off = self.rng.uniform(0, TAU)
             for k in range(n):
@@ -488,7 +537,8 @@ class Bot:
         d = math.dist(self.camp, (x, y))
         if d < 3:
             return (0.0, 0.0), 0.0
-        return self.walk_to(me, self.camp), (1.0 if d > 25 else 0.42)
+        quiet = (self.cfg["sound"]["step_speed"] - 0.4) / max(1.0, me["stats"].get("walk_speed", 11.7))
+        return self.walk_to(me, self.camp), (1.0 if d > 25 else quiet)
 
     def walk_to(self, me, p):
         x, y, _ = me["pos"]
