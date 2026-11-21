@@ -156,12 +156,12 @@ class World:
             q.append(k)
         self.pending = (dist, q, (gx, gy, gr))
 
-    def step_flow(self, budget_s):
+    def step_flow(self, budget_nodes):
+        """Expand at most `budget_nodes` cells (deterministic: no wall-clock gate)."""
         if getattr(self, "pending", None) is None:
             return
         dist, q, goal = self.pending
         h, cnx, cny = self.ch, self.cnx, self.cny
-        end = time.perf_counter() + budget_s
         n = 0
         while q:
             u = q.popleft()
@@ -182,7 +182,7 @@ class World:
                     dist[v] = nd
                     q.append(v)
             n += 1
-            if (n & 255) == 0 and time.perf_counter() > end:
+            if n >= budget_nodes:
                 return
         self.flow = (dist, goal)
         self.pending = None

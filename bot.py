@@ -21,6 +21,7 @@ FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
 FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
 FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
 LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
+FLOW_NODES = 4000  # flow-field cells expanded per decision (~6 ms native)
 F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst,laser2").split(",") if x)  # experiment switches
 V4 = os.environ.get("WRAITH_V4", "1") == "1"
 STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
@@ -285,9 +286,8 @@ class Bot:
         act["jump"] = jump
         self.mode = mode
 
-        # spend leftover budget on the flow field
-        used = time.perf_counter() - t0
-        self.world.step_flow(max(0.0, 0.012 - used))
+        # advance the flow field by a fixed node budget (deterministic across CPU load)
+        self.world.step_flow(FLOW_NODES)
         mf.draw.label(f"{'F' if self.ffa else 'P'} {mode} hp{me['hp']:.0f} thr{len(near_threats)}")
         return act
 
@@ -598,8 +598,6 @@ class Bot:
         ths = [(p, m) for m, p, age in threats[:4]]
         best, bs = None, -1e18
         for ring in (12, 24, 40, 60):
-            if time.perf_counter() - self.t0 > 0.018:
-                break
             n = 12
             off = self.rng.uniform(0, TAU)
             for k in range(n):
