@@ -21,6 +21,7 @@ FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
 FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
 FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
 LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
+F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst").split(",") if x)  # experiment switches
 V4 = os.environ.get("WRAITH_V4", "1") == "1"
 STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
 SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
@@ -79,6 +80,8 @@ class Bot:
         """Circle we want to be inside: the next circle (shrunk by a margin)."""
         z = obs["zone"]
         c, r = z["next_center"], z["next_radius"]
+        if "zdeep" in F:
+            return c, max(min(r, 6.0), r * (0.55 if r >= 100 else 0.2))
         margin = min(25.0, 0.25 * r)
         return c, max(r - margin, min(r, 6.0))
 
@@ -116,6 +119,8 @@ class Bot:
                 self.kills += 1
             if ev["type"] == "damaged":
                 self.last_dmg_t = t
+                if ev.get("by") is not None:
+                    self.last_attacker = ev["by"]
                 if ev.get("bearing") is not None and ev.get("weapon") != "zone":
                     self.threat_dirs.append((t, ev["bearing"], 2.0))
         for s in obs.get("sounds", []):
@@ -161,6 +166,12 @@ class Bot:
             self.rotating = sc  # stays committed until we are inside
         rotating = getattr(self, "rotating", None) is not None
         pressing = out_zone or (rotating and t_left < travel + 8)
+        if "zdeep" in F and z["shrink_start"] <= t <= z["shrink_end"]:
+            # shrinking wall within 5 m or 4 s: move now
+            edge = zr - math.dist((x, y), zc)
+            wall_v = (z["radius"] - z["next_radius"]) / max(1e-3, z["shrink_end"] - z["shrink_start"])
+            if edge < 5 or edge / max(wall_v, 1e-3) < 4:
+                pressing = True
 
         # --- choose movement goal
         goal = None
@@ -190,13 +201,24 @@ class Bot:
         elif mode == "evade":
             move, boost = self.evade_move(me, near_threats, sc, sr, t)
         elif mode == "fight":
-            tp = target[1]["pos"] if target and target[0] == "mech" else near_threats[0][1]
-            move, boost = self.fight_move(me, tp, target, sc, sr, t)
+            if target and target[0] == "mech":
+                tp = target[1]["pos"]
+            elif near_threats:
+                tp = near_threats[0][1]
+            elif mechs:
+                tp = min(mechs, key=lambda m: math.dist(m["pos"][:2], (x, y)))["pos"]
+            else:
+                tp = None
+            if tp is None:
+                mode = "loot"
+                move, speed = self.loot_move(me, obs, sc, sr, t, target)
+            else:
+                move, boost = self.fight_move(me, tp, target, sc, sr, t)
         elif mode in ("cube", "arm"):
             gp = extra
             move = self.walk_to(me, gp)
             d = math.dist(gp[:2], (x, y))
-            boost = d > 40 and me["energy"] > 50 and not near_threats
+            boost = d > 40 and me["energy"] > 50 and (not near_threats or ("armfirst" in F and mode == "arm"))
         else:
             move, speed = self.loot_move(me, obs, sc, sr, t, target)
 
@@ -312,7 +334,9 @@ class Bot:
         # weapon we want
         want_pick = None
         for pid, (kind, pos, _) in self.pick_mem.items():
-            if kind not in ("laser", "lightning") or kind in held or abs(pos[2] - z) > 25:
+            if kind not in ("laser", "lightning") or kind in held or abs(pos[2] - z) > (3 if "lootf" in F else 25):
+                continue
+            if "lootf" in F and math.dist(pos[:2], obs["zone"]["next_center"]) > obs["zone"]["next_radius"] - 10:
                 continue
             d = math.dist(pos[:2], (x, y))
             if d > (240 if not armed else 160):
@@ -324,6 +348,8 @@ class Bot:
         want_cube = None
         for cid, (pos, _) in self.cube_mem2.items():
             d = math.dist(pos[:2], (x, y))
+            if "lootf" in F and math.dist(pos[:2], obs["zone"]["next_center"]) > obs["zone"]["next_radius"] - 10:
+                continue
             if d < 70 and abs(pos[2] - z) < 4 and self.in_circle(pos[0], pos[1], sc, sr + 20):
                 if want_cube is None or d < want_cube[1]:
                     want_cube = (pos, d)
@@ -340,9 +366,12 @@ class Bot:
         tv, td = None, 1e9
         for m in mechs:
             d = math.dist(m["pos"][:2], (x, y))
-            if d < td and d < 285:
+            if d < td and d < 220:
                 tv, td = m, d
-        if hp_frac < 0.38 and near_threats:
+        if "ret" in F:
+            if hp_frac < 0.35 and tv is not None and tv.get("hp", 0) > me["hp"]:
+                self.retreating = True
+        elif hp_frac < 0.38 and near_threats:
             self.retreating = True
         if getattr(self, "retreating", False) and (hp_frac > 0.8 or (t - self.last_dmg_t > 12 and hp_frac > 0.6)):
             self.retreating = False
@@ -350,6 +379,8 @@ class Bot:
         finishing = weak and td < 130 and hp_frac > 0.3 and len(real) <= 2
         close_fight = (tv is not None and td < 40 and (has_light or hp_frac > 0.5)) or finishing
         many = len(real) >= 3 or (len(real) >= 2 and hp_frac < 0.6) or dmg_recent > 220
+        if "ret" in F:
+            many = len(real) >= 4 or (len(real) >= 3 and hp_frac < 0.5)
         outranged = (not has_laser) and any("laser" in (q[0].get("weapons") or []) and
                                             math.dist(q[1][:2], (x, y)) > 70 for q in real)
         if self.ffa and tv is not None and not finishing:
@@ -359,6 +390,8 @@ class Bot:
         if pressing:
             return "zone", None
         if (getattr(self, "retreating", False) or many or outranged) and not close_fight and near_threats:
+            if "armfirst" in F and not armed and want_pick and want_pick[1] < 120 and hp_frac > 0.4:
+                return "arm", want_pick[0]
             return "evade", None
         if rotating:
             return "zone", None
@@ -385,6 +418,12 @@ class Bot:
                 s = d * 0.6 + m.get("hp", 1400) * 0.08
                 if m["id"] == getattr(self, "last_target", None):
                     s -= 40
+                if not self.world.los((x, y, z + me["stats"].get("muzzle_height", 7)), (m["pos"][0], m["pos"][1], m["pos"][2] + 4.5)):
+                    s += 60
+            if "tgt" in F:
+                s = d * (0.5 + m.get("hp", 1400) / max(1, m.get("max_hp", 1400)))
+                if m["id"] == getattr(self, "last_attacker", None):
+                    s *= 0.3
                 if not self.world.los((x, y, z + me["stats"].get("muzzle_height", 7)), (m["pos"][0], m["pos"][1], m["pos"][2] + 4.5)):
                     s += 60
             if s < bs:
@@ -447,6 +486,8 @@ class Bot:
         err = abs(angdiff(me["aim"][0], yaw))
         perr = abs(me["aim"][1] - pitch)
         tol = math.atan2(2.2, max(dh, 1)) + 0.01
+        if "aimtol" in F:
+            tol = max(0.02, math.atan2(1.8, max(dh, 1)))
         clear = self.world.los(src, pt)
         # laser is hitscan: when it is nearly charged, aim at where the target is now (tiny lead only)
         if LASER_FIX:
