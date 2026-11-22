@@ -649,8 +649,8 @@ class Brain:
             d = math.hypot(dr["pos"][0] - x, dr["pos"][1] - y)
             if dr.get("lands_in", 0) > d / walk + 12:
                 continue
-            if any(now - t.seen < 15 and math.hypot(
-                    t.pos[0] - dr["pos"][0], t.pos[1] - dr["pos"][1]) < d + 25
+            if any(now - t.seen < 6 and math.hypot(
+                    t.pos[0] - dr["pos"][0], t.pos[1] - dr["pos"][1]) < d - 10
                     for t in self.tracks.values()):
                 continue
             need = (1 - hp_frac) * 240 + (0 if capped else 50)
