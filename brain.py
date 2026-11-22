@@ -122,6 +122,7 @@ class Brain:
         self.npc_hurt, self.npc_bearing = -99.0, 0.0
         self.not_practice, self.prac_on = False, False
         self.start_alive, self.kills, self.other_dead = None, 0, 0
+        self.other_seen = 0
         self.stick_id, self.stick_at, self.lose_at = -1, -99.0, -99.0
         self.mode = "start"
         m = self.cfg["mech"]
@@ -214,11 +215,11 @@ class Brain:
                 self.tracks.pop(e.get("target"), None)
         if self.start_alive is None:
             self.start_alive = o["alive"]
-        if self.start_alive - o["alive"] - self.kills > 0:
-            self.other_dead += 1
-        else:
-            self.other_dead = 0
-        if self.other_dead >= 5:
+        d = self.start_alive - o["alive"] - self.kills
+        if d > self.other_seen:
+            self.other_dead += d - self.other_seen
+            self.other_seen = d
+        if self.other_dead >= 4:
             self.not_practice = True
         on = not self.not_practice and now > 20
         if on != self.prac_on:
