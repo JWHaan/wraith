@@ -214,7 +214,7 @@ class Nav:
         Long routes: A* on the 4 m grid (cheap enough to cross the campus)."""
         if math.hypot(gx - sx, gy - sy) < 120:
             return [self.cellpos(c) for c in self.path(sx, sy, gx, gy, 6000)]
-        return self.path_coarse(sx, sy, gx, gy, 4500)
+        return self.path_coarse(sx, sy, gx, gy, 9000)
 
     def path_coarse(self, sx, sy, gx, gy, max_expand=9000):
         W = self.W
