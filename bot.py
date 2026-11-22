@@ -31,7 +31,7 @@ LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
 FLOW_NODES = 4000  # flow-field cells expanded per decision (~6 ms native)
 F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst,laser2,ltgfirst,kiteheal,armor1").split(",") if x)  # experiment switches
 FLAG_LTG_FIRST = "ltgfirst" in F   # 1: loadout gun + lightning (laser only until lightning), duel at 30 m
-FIRE_TOL = float(os.environ.get("WRAITH_FIRETOL", "1.5"))  # 2: gun/lightning aim tolerance multiplier
+FIRE_TOL = float(os.environ.get("WRAITH_FIRETOL", "1.2"))  # 2: gun/lightning aim tolerance multiplier
 FLAG_KITE_HEAL = "kiteheal" in F   # 3: once hidden behind cover, hold still and silent for the repair delay
 FLAG_ARMOR_FIRST = "armor1" in F   # 4: armor before plating
 V4 = os.environ.get("WRAITH_V4", "1") == "1"
