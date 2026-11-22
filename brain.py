@@ -642,6 +642,20 @@ class Brain:
                 for n in self.npcs.values():
                     if now - n.seen < 12 and math.hypot(n.pos[0] - x, n.pos[1] - y) < P.loot_radius:
                         consider("npc", n.id, n.pos, 85.0)
+        for dr in o.get("drops", []):
+            h = dr.get("holder")
+            if h is not None and h != me.get("id"):
+                continue
+            d = math.hypot(dr["pos"][0] - x, dr["pos"][1] - y)
+            if dr.get("lands_in", 0) > d / walk + 12:
+                continue
+            if any(now - t.seen < 15 and math.hypot(
+                    t.pos[0] - dr["pos"][0], t.pos[1] - dr["pos"][1]) < d + 25
+                    for t in self.tracks.values()):
+                continue
+            need = (1 - hp_frac) * 240 + (0 if capped else 50)
+            if need > 60:
+                consider("drop", dr["id"], dr["pos"], need)
         if best is None:
             self.loot_id = -1
             return None
@@ -912,6 +926,8 @@ class Brain:
                             mx, my = (x - pos[0]) / max(d, 0.1), (y - pos[1]) / max(d, 0.1)
                     else:
                         mx, my = self.travel(me, pos[0], pos[1])
+                elif kind == "drop" and math.hypot(pos[0] - x, pos[1] - y) < 5:
+                    mx, my = 0.0, 0.0
                 else:
                     mx, my = self.travel(me, pos[0], pos[1])
             elif zdist > 3 and (not P.ghost or zz["next_radius"] <= 30):
