@@ -301,14 +301,14 @@ class Brain:
         if d < 45 and N.line_walkable(x, y, gx, gy):
             return unit(gx, gy)
         if self.path is None or math.hypot(gx - self.path_goal[0], gy - self.path_goal[1]) > 5 or self.now - self.path_at > 2.5:
-            self.path = N.path(x, y, gx, gy)
+            self.path = N.path_points(x, y, gx, gy)
             self.path_goal, self.path_at, self.path_i = (gx, gy), self.now, 0
         if not self.path:
             return unit(gx, gy)
         path = self.path
         bi, bd = self.path_i, math.inf
         for i in range(self.path_i, min(len(path), self.path_i + 10)):
-            px, py = N.cellpos(path[i])
+            px, py = path[i]
             dd = math.hypot(px - x, py - y)
             if dd < bd:
                 bi, bd = i, dd
@@ -317,13 +317,13 @@ class Brain:
             self.path = None
             return unit(gx, gy)
         for i in range(min(bi + 14, len(path) - 1), bi, -1):
-            px, py = N.cellpos(path[i])
+            px, py = path[i]
             if N.line_walkable(x, y, px, py):
                 if i == len(path) - 1 and math.hypot(px - gx, py - gy) < 4 and N.line_walkable(x, y, gx, gy):
                     return unit(gx, gy)
                 return unit(px, py)
         if bi + 1 < len(path):
-            return unit(*N.cellpos(path[bi + 1]))
+            return unit(*path[bi + 1])
         return unit(gx, gy)
 
     def escape(self, me):
