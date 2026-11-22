@@ -210,7 +210,7 @@ class Nav:
         return out
 
     # ---- cover search ---------------------------------------------------------
-    def cover_bfs(self, x, y, hidden, penalty, threats, max_checks=90, max_steps=50):
+    def cover_bfs(self, x, y, hidden, penalty, threats, max_checks=350, max_steps=50):
         """Nearest walkable cell (BFS order) for which hidden(cx, cy) holds, scored by
         2*steps + zone penalty - 0.25*min(distance to nearest threat, 80). Returns (x, y) or None."""
         s = self.nearest_free(self.cellof(x, y))
