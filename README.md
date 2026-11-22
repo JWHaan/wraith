@@ -50,6 +50,10 @@ Paired local placement points against `1e2baf4` (same spawn and opponents for ea
 On the development seeds, laser pickups by 30 seconds rose from 6/24 to 12/24. Across the 288 non-development
 seeds, survival to the end rose from 69 to 87 matches. These are simulator results, not an official score.
 
+Reported practice score for merged commit `2d8943f`: **5.09**. The previous baseline (`85399d3`,
+same bot as `1e2baf4`) was recorded at **5.75**. These were not paired official runs; the local
+gain did not translate into a new practice best.
+
 To repeat a batch, extract the original bot's helpers and grid as well as its entry point:
 
 ```sh

@@ -618,18 +618,15 @@ class Brain:
                 best_u, best = u, (kind, iid, pos, value)
         P = self.P
         ws = me["weapons"]
-        # Before the first duel a reachable laser is worth a detour past ordinary loot.
-        arm_up = now < 30 and not danger and hp_frac > 0.7
-        laser_seek = max(P.laser_seek, 18 * walk) if arm_up else P.laser_seek
         for p in self.pickups.values():
             rad = P.loot_radius
-            seek = p["kind"] == "laser" and laser_seek > rad
+            seek = p["kind"] == "laser" and P.laser_seek > rad
             if seek:
-                rad = laser_seek
+                rad = P.laser_seek
             if self.want_pickup(me, p["kind"]) and math.hypot(p["pos"][0] - x, p["pos"][1] - y) < rad:
                 v = 130.0 if (len(ws) > 1 and ws[1] is None) else 60.0
                 if seek:
-                    v = max(v, 350.0 if arm_up else 150.0)
+                    v = max(v, 150.0)
                 consider("pickup", p["id"], p["pos"], v)
         cap = self.cfg["cubes"]["stat_cap"]
         capped = me.get("cubes", 0) >= cap
@@ -917,8 +914,6 @@ class Brain:
                         mx, my = self.travel(me, pos[0], pos[1])
                 else:
                     mx, my = self.travel(me, pos[0], pos[1])
-                    if kind == "pickup" and self.pickups[iid]["kind"] == "laser" and now < 30 and not danger:
-                        boost = me["grounded"] and me["energy"] > 55 and math.hypot(pos[0] - x, pos[1] - y) > 12
             elif zdist > 3 and (not P.ghost or zz["next_radius"] <= 30):
                 mx, my = self.travel(me, zgx, zgy)
                 mode = "zone-walk"
