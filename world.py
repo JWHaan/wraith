@@ -31,6 +31,17 @@ class World:
             self.surf = [0.0] * n
             self.solid = bytes(n)
         self._build_coarse()
+        # optional 1 m unpadded sight-line raster (cm), used only for line of sight
+        self.los_cm = None
+        try:
+            with open(os.path.join(HERE, "los.bin"), "rb") as f:
+                lh = json.loads(f.readline())
+                a = array("h")
+                a.frombytes(f.read(lh["nx"] * lh["ny"] * 2))
+                self.lx0, self.ly0, self.lnx, self.lny = lh["x0"], lh["y0"], lh["nx"], lh["ny"]
+                self.los_cm = a
+        except Exception:
+            self.los_cm = None
 
     # ---- fine grid -------------------------------------------------------------
     def idx(self, x, y):
@@ -54,6 +65,8 @@ class World:
 
     def los(self, a, b, step=2.5):
         """True if the segment a->b (3D) clears buildings and terrain."""
+        if self.los_cm is not None:
+            return self.los_fine(a, b)
         dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
         d = math.hypot(dx, dy)
         if d < 4:
@@ -63,6 +76,29 @@ class World:
         for k in range(1, n):
             f = k / n
             if surf[idx(a[0] + dx * f, a[1] + dy * f)] > a[2] + dz * f + 0.3:
+                return False
+        return True
+
+    def los_fine(self, a, b):
+        """Line of sight on the 1 m unpadded raster, sampled every metre."""
+        ax, ay, az = a
+        dx, dy, dz = b[0] - ax, b[1] - ay, b[2] - az
+        d = math.hypot(dx, dy)
+        if d < 2:
+            return True
+        n = int(d)
+        grid, nx, ny = self.los_cm, self.lnx, self.lny
+        x0, y0 = self.lx0, self.ly0
+        inv = 1.0 / n
+        sx, sy, sz = dx * inv, dy * inv, dz * inv * 100.0
+        px, py, pz = ax - x0, ay - y0, az * 100.0
+        for k in range(1, n):
+            px += sx
+            py += sy
+            pz += sz
+            i = int(px)
+            j = int(py)
+            if 0 <= i < nx and 0 <= j < ny and grid[j * nx + i] > pz:
                 return False
         return True
 
