@@ -1,5 +1,6 @@
 """Survival-first mech bot: stay in the zone, stay out of sight, fight facing the threat, loot when quiet."""
 import gc
+import os
 import math
 import random
 import sys
@@ -7,6 +8,10 @@ import time
 
 import mechfight as mf
 from world import World
+from nav import Nav
+from brain import Brain
+
+USE_V9 = os.environ.get("WRAITH_BRAIN", "v9") == "v9"
 
 TAU = 2 * math.pi
 UPGRADE_PRIORITY = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate",
@@ -50,6 +55,7 @@ class Bot:
         self.cfg = hello["config"]
         self.rng = random.Random(hello.get("seed", 1))
         self.world = World()
+        self.brain = Brain(hello, self.world, Nav(self.world)) if USE_V9 else None
         self.mem = {}            # mech id -> dict(pos, vel, t, hp, weapons, aim, charging)
         self.threat_dirs = []    # (t, bearing, weight)
         self.flow_goal = None
@@ -103,6 +109,11 @@ class Bot:
 
     # ------------------------------------------------------------------ main
     def act(self, obs):
+        if self.brain is not None:
+            a = self.brain.act(obs)
+            self.mode = self.brain.mode
+            mf.draw.label(f"{'S' if self.brain.prac_on else 'F'} {self.brain.mode} hp{obs['self']['hp']:.0f}")
+            return a
         t0 = time.perf_counter()
         self.t0 = t0
         me = obs["self"]
