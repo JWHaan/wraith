@@ -680,7 +680,9 @@ class Brain:
         for t in self.tracks.values():
             if self.now - t.seen < 20:
                 crowd += max(0.0, 80 - math.hypot(t.pos[0] - px, t.pos[1] - py)) / 80
-        expo = max(0.0, 1 - self.W.cover_at(px, py) / 20.0)
+        expo = self.W.exposure(px, py)
+        if expo is None:
+            expo = max(0.0, 1 - self.W.cover_at(px, py) / 20.0)
         edge = math.hypot(px - zz["next_center"][0], py - zz["next_center"][1]) / max(30, zz["next_radius"])
         return self.P.home_expo * expo + 0.25 * math.hypot(px - o["self"]["pos"][0], py - o["self"]["pos"][1]) + 40 * crowd + 10 * edge
 

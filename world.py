@@ -31,6 +31,14 @@ class World:
             self.surf = [0.0] * n
             self.solid = bytes(n)
         self._build_coarse()
+        self.expo = None
+        try:
+            with open(os.path.join(HERE, "exposure.bin"), "rb") as f:
+                eh = json.loads(f.readline())
+                if eh["cnx"] == self.cnx and eh["cny"] == self.cny:
+                    self.expo = f.read(self.cnx * self.cny)
+        except Exception:
+            self.expo = None
 
     # ---- fine grid -------------------------------------------------------------
     def idx(self, x, y):
@@ -124,6 +132,12 @@ class World:
     def ccenter(self, k):
         j, i = divmod(k, self.cnx)
         return (self.x0 + (i + 0.5) * self.ccell, self.y0 + (j + 0.5) * self.ccell)
+
+    def exposure(self, x, y):
+        """Mean sight-line reach (0..1) from gun height, precomputed; None if the map file is missing."""
+        if self.expo is None:
+            return None
+        return self.expo[self.cidx(x, y)] / 255.0
 
     def cover_at(self, x, y):
         return self.cover[self.cidx(x, y)]
