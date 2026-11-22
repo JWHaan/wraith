@@ -223,7 +223,7 @@ class Brain:
         on = not self.not_practice and now > 20
         if on != self.prac_on:
             self.prac_on = on
-            self.P = self.base.squad() if on else self.base
+            self.P = self.base
         zz = o["zone"]
         if self.hold_start != zz["shrink_start"]:
             self.hold_start = zz["shrink_start"]
