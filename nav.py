@@ -209,80 +209,8 @@ class Nav:
         out.reverse()
         return out
 
-    def path_points(self, sx, sy, gx, gy):
-        """Waypoints (x, y) toward the goal. Short routes: exact A* on the 2 m grid.
-        Long routes: A* on the 4 m grid (cheap enough to cross the campus)."""
-        if math.hypot(gx - sx, gy - sy) < 120:
-            return [self.cellpos(c) for c in self.path(sx, sy, gx, gy, 6000)]
-        return self.path_coarse(sx, sy, gx, gy, 9000)
-
-    def path_coarse(self, sx, sy, gx, gy, max_expand=9000):
-        W = self.W
-        cnx, cny = W.cnx, W.cny
-        ch, csolid = W.ch, W.csolid
-
-        def free(k):
-            return not csolid[k]
-
-        def near_free(k):
-            if free(k):
-                return k
-            j0, i0 = divmod(k, cnx)
-            for r in range(1, 5):
-                for dj in range(-r, r + 1):
-                    for di in (-r, r) if abs(dj) != r else range(-r, r + 1):
-                        i, j = i0 + di, j0 + dj
-                        if 0 <= i < cnx and 0 <= j < cny and free(j * cnx + i):
-                            return j * cnx + i
-            return -1
-        s = near_free(W.cidx(sx, sy))
-        g = near_free(W.cidx(gx, gy))
-        if s < 0 or g < 0:
-            return []
-        gj, gi = divmod(g, cnx)
-        cost = {s: 0.0}
-        parent = {s: -1}
-        heap = [(0.0, s)]
-        best, bh = s, 1e18
-        n = 0
-        while heap and n < max_expand:
-            f, c = heapq.heappop(heap)
-            n += 1
-            if c == g:
-                best = g
-                break
-            cj, ci = divmod(c, cnx)
-            h = math.hypot(ci - gi, cj - gj)
-            if h < bh:
-                bh, best = h, c
-            gc = cost[c]
-            for di, dj, w in NBRS:
-                i, j = ci + di, cj + dj
-                if i < 0 or j < 0 or i >= cnx or j >= cny:
-                    continue
-                v = j * cnx + i
-                if csolid[v]:
-                    continue
-                diag = w > 1.0
-                if ch[v] - ch[c] > (5.5 if diag else 4.0):
-                    continue
-                if diag and (csolid[cj * cnx + i] or csolid[j * cnx + ci]):
-                    continue
-                nc = gc + w
-                if nc < cost.get(v, 1e18):
-                    cost[v] = nc
-                    parent[v] = c
-                    heapq.heappush(heap, (nc + 1.15 * math.hypot(i - gi, j - gj), v))
-        out = []
-        c = best
-        while c >= 0:
-            out.append(W.ccenter(c))
-            c = parent[c]
-        out.reverse()
-        return out
-
     # ---- cover search ---------------------------------------------------------
-    def cover_bfs(self, x, y, hidden, penalty, threats, max_checks=350, max_steps=50):
+    def cover_bfs(self, x, y, hidden, penalty, threats, max_checks=90, max_steps=50):
         """Nearest walkable cell (BFS order) for which hidden(cx, cy) holds, scored by
         2*steps + zone penalty - 0.25*min(distance to nearest threat, 80). Returns (x, y) or None."""
         s = self.nearest_free(self.cellof(x, y))
