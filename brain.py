@@ -6,9 +6,13 @@ fight-move scorer, BFS cover search, deadline-based zone timing, loot utility an
 This file is an independent Python implementation on wraith's own map model (world.py / nav.py).
 """
 import math
+import os
 import random
 
 LAT = 0.075
+# hit-and-vanish (idea from lmaccart's "phantom" bot; our own implementation)
+VANISH = os.environ.get("WRAITH_VANISH", "1") == "1"
+VANISH_LOOT_S, VANISH_DIST, VANISH_MOVE_S, VANISH_SILENT_S = 3.0, 175.0, 17.0, 40.0
 TAU = 2 * math.pi
 
 UPGRADES = ["plating", "armor", "gun_damage", "nanites", "gun_rate", "lightning_efficiency", "lightning_range",
@@ -124,6 +128,9 @@ class Brain:
         self.start_alive, self.kills, self.other_dead = None, 0, 0
         self.stick_id, self.stick_at, self.lose_at = -1, -99.0, -99.0
         self.mode = "start"
+        self.v_pending, self.v_start = False, False
+        self.v_loot_site, self.v_loot_until = None, -1.0
+        self.v_dest, self.v_move_until, self.v_silent_until = None, -1.0, -1.0
         m = self.cfg["mech"]
         self.mech_r, self.mech_h, self.eye_h = m["radius"], m["height"], m["eye_height"]
         self.size_per_cube = self.cfg["cubes"]["size_per_cube"]
@@ -211,7 +218,10 @@ class Brain:
                         n.hit_me = now
             elif e["type"] == "kill":
                 self.kills += 1
-                self.tracks.pop(e.get("target"), None)
+                dead = self.tracks.pop(e.get("target"), None)
+                if dead is not None:
+                    self.v_loot_site = (dead.pos[0], dead.pos[1], dead.pos[2], now)
+                self.v_pending = True
         if self.start_alive is None:
             self.start_alive = o["alive"]
         if self.start_alive - o["alive"] - self.kills > 0:
@@ -708,6 +718,62 @@ class Brain:
                 best, br = i, r
         return best
 
+    # ---- hit and vanish ----------------------------------------------------------
+    def vanish(self, o, hp_frac, target, seen_now):
+        """After a kill (or a hard fight): grab the kill's cubes for <= 3 s, then relocate 175 m away
+        from the kill toward the next circle, then stay silent for 40 s. Returns (mx, my, boost, mode) or None."""
+        me = o["self"]
+        x, y = me["pos"][0], me["pos"][1]
+        now = self.now
+        zz = o["zone"]
+        if hp_frac < 0.5 and not seen_now and now - self.last_hurt < 6 and now > self.v_move_until \
+                and now > self.v_silent_until:
+            self.v_pending = True  # hard fight without a kill: vanish too
+        if target is not None:
+            return None
+        if self.v_pending:
+            self.v_pending = False
+            self.v_start = True
+            ls = self.v_loot_site
+            if ls is not None and now - ls[3] < 20 and math.hypot(x - ls[0], y - ls[1]) < 28:
+                self.v_loot_until = now + VANISH_LOOT_S
+            else:
+                self.v_loot_until = -1.0
+        ls = self.v_loot_site
+        if self.v_loot_until > 0 and now < self.v_loot_until and ls is not None and math.hypot(x - ls[0], y - ls[1]) > 4:
+            mx, my = self.travel(me, ls[0], ls[1])
+            return mx, my, False, "vanish:loot"
+        if self.v_start and (self.v_loot_until <= 0 or now >= self.v_loot_until):
+            self.v_start = False
+            self.v_loot_until = -1.0
+            kx, ky = (ls[0], ls[1]) if ls is not None else (x, y)
+            ax, ay = x - kx, y - ky
+            ad = math.hypot(ax, ay) or 1.0
+            ncx, ncy = zz["next_center"]
+            nr = zz["next_radius"]
+            zx, zy = ncx - x, ncy - y
+            zd = math.hypot(zx, zy) or 1.0
+            dx, dy = ax / ad + 0.7 * zx / zd, ay / ad + 0.7 * zy / zd
+            dd = math.hypot(dx, dy) or 1.0
+            dest = [x + dx / dd * VANISH_DIST, y + dy / dd * VANISH_DIST]
+            dc = math.hypot(dest[0] - ncx, dest[1] - ncy)
+            if nr > 10 and dc > nr * 0.85:
+                sc = nr * 0.85 / dc
+                dest = [ncx + (dest[0] - ncx) * sc, ncy + (dest[1] - ncy) * sc]
+            k = self.N.nearest_free(self.N.cellof(dest[0], dest[1]), 12)
+            if k >= 0 and self.N.comp[k] == self.N.main:
+                dest = list(self.N.cellpos(k))
+            self.v_dest = dest
+            self.v_move_until = now + VANISH_MOVE_S
+            self.v_silent_until = now + VANISH_SILENT_S
+        if self.v_dest is not None and now < self.v_move_until:
+            if math.hypot(x - self.v_dest[0], y - self.v_dest[1]) < 14:
+                self.v_move_until = -1.0
+            else:
+                mx, my = self.travel(me, self.v_dest[0], self.v_dest[1])
+                return mx, my, me["energy"] > 10, "vanish:move"
+        return None
+
     # ---- main step ---------------------------------------------------------------
     def act(self, o):
         act = {}
@@ -839,6 +905,9 @@ class Brain:
             mx, my = self.travel(me, zgx, zgy)
             boost = ((not me["in_zone"]) or now + t_need >= deadline) and me["energy"] > 5
             mode = "zone"
+        elif VANISH and not late and self._set(vn := self.vanish(
+                o, hp_frac, target, any(t.seen == now for t in seen))) is not None:
+            mx, my, boost, mode = vn
         elif self.retreat and not finishing and not late:
             cm = self.cover_move(o, seen)
             if cm is not None:
@@ -892,7 +961,7 @@ class Brain:
             mx, my = self.travel(me, zgx, zgy)
             mode = "zone"
         else:
-            lc = self.choose_loot(o, hp_frac, danger)
+            lc = self.choose_loot(o, hp_frac, danger or (VANISH and now < self.v_silent_until))
             if lc is not None:
                 kind, iid, pos, _ = lc
                 mode = "loot:" + kind
@@ -926,6 +995,10 @@ class Brain:
                         mx, my = mx * q, my * q
                     mode = "home"
 
+        if VANISH and now < self.v_silent_until and (mode in ("idle", "home", "zone-walk") or mode.startswith("loot:")):
+            q = min(1.0, 4.6 / walk)  # under step_speed: no footstep sounds
+            mx, my = mx * q, my * q
+            boost = False
         if esc_jump:
             act["jump"] = True
         if P.dodge and mode not in ("unstuck", "escape"):
