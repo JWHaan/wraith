@@ -15,6 +15,8 @@ UPGRADE_PRIORITY = ["plating", "armor", "nanites", "laser_damage", "lightning_ef
                     "mortar_reload", "mortar_velocity", "mortar_splash"]
 import os
 WEAPON_PREF = {"laser": 3, "lightning": 2, "gun": 0, "mortar": -5}
+if "armor1" in os.environ.get("WRAITH_F", "ret,armfirst,laser2,ltgfirst,kiteheal,armor1"):
+    UPGRADE_PRIORITY = ["armor", "plating"] + [u for u in UPGRADE_PRIORITY if u not in ("armor", "plating")]
 if os.environ.get("WRAITH_PREF") == "lightning":
     WEAPON_PREF = {"lightning": 3, "laser": 2, "gun": 0, "mortar": -5}
 FIGHT_RANGE = float(os.environ.get("WRAITH_RANGE", "120"))
@@ -22,7 +24,11 @@ FIGHT_N = int(os.environ.get("WRAITH_FN", "1"))
 FIGHT_HP = float(os.environ.get("WRAITH_FHP", "0.45"))
 LASER_FIX = os.environ.get("WRAITH_LFIX", "1") == "1"
 FLOW_NODES = 4000  # flow-field cells expanded per decision (~6 ms native)
-F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst,laser2").split(",") if x)  # experiment switches
+F = set(x for x in os.environ.get("WRAITH_F", "ret,armfirst,laser2,ltgfirst,kiteheal,armor1").split(",") if x)  # experiment switches
+FLAG_LTG_FIRST = "ltgfirst" in F   # 1: loadout gun + lightning (laser only until lightning), duel at 30 m
+FIRE_TOL = float(os.environ.get("WRAITH_FIRETOL", "1.5"))  # 2: gun/lightning aim tolerance multiplier
+FLAG_KITE_HEAL = "kiteheal" in F   # 3: once hidden behind cover, hold still and silent for the repair delay
+FLAG_ARMOR_FIRST = "armor1" in F   # 4: armor before plating
 V4 = os.environ.get("WRAITH_V4", "1") == "1"
 STICKY = os.environ.get("WRAITH_STICKY", "1") == "1"
 SNEAK = os.environ.get("WRAITH_SNEAK", "1") == "1"
@@ -135,6 +141,8 @@ class Bot:
         if unexplained >= 2 or (unexplained >= 1 and t < 60):
             self.ffa = True
         mechs = [m for m in obs["mechs"] if m["kind"] == "mech"]
+        self.visible_now = any(self.world.los((m["pos"][0], m["pos"][1], m["pos"][2] + 8), (x, y, z + 4.5))
+                               for m in mechs)
         npcs = [m for m in obs["mechs"] if m["kind"] == "npc"]
         for m in mechs:
             self.mem[m["id"]] = {**m, "t": t}
@@ -336,6 +344,8 @@ class Bot:
         for pid, (kind, pos, _) in self.pick_mem.items():
             if kind not in ("laser", "lightning") or kind in held or abs(pos[2] - z) > (3 if "lootf" in F else 25):
                 continue
+            if FLAG_LTG_FIRST and kind == "laser" and has_light:
+                continue  # loadout is gun + lightning
             if "lootf" in F and math.dist(pos[:2], obs["zone"]["next_center"]) > obs["zone"]["next_radius"] - 10:
                 continue
             d = math.dist(pos[:2], (x, y))
@@ -343,8 +353,9 @@ class Bot:
                 continue
             if not self.in_circle(pos[0], pos[1], sc, sr + 25) and d > 30:
                 continue
-            if want_pick is None or d < want_pick[1]:
-                want_pick = (pos, d)
+            dd = d * (0.7 if (FLAG_LTG_FIRST and kind == "lightning") else 1.0)
+            if want_pick is None or dd < want_pick[1]:
+                want_pick = (pos, dd)
         want_cube = None
         for cid, (pos, _) in self.cube_mem2.items():
             d = math.dist(pos[:2], (x, y))
@@ -488,7 +499,7 @@ class Bot:
         aim = [yaw, pitch]
         err = abs(angdiff(me["aim"][0], yaw))
         perr = abs(me["aim"][1] - pitch)
-        tol = math.atan2(2.2, max(dh, 1)) + 0.01
+        tol = (math.atan2(2.2, max(dh, 1)) + 0.01) * FIRE_TOL
         if "aimtol" in F:
             tol = max(0.02, math.atan2(1.8, max(dh, 1)))
         clear = self.world.los(src, pt)
@@ -515,7 +526,7 @@ class Bot:
                 if dh < st["range"] and err < tol and perr < tol * 1.5 + 0.02 and clear and w.get("reload", 0) == 0:
                     fire[si] = True
             elif k == "lightning":
-                if kind != "crate" and dh < st["range"] * 0.95 and err < math.radians(st["cone_deg"]) * 0.45 and me["energy"] > st.get("energy", 3) + 5 and clear:
+                if kind != "crate" and dh < st["range"] * 0.95 and err < math.radians(st["cone_deg"]) * min(0.5, 0.45 * FIRE_TOL) and me["energy"] > st.get("energy", 3) + 5 and clear:
                     fire[si] = True
             elif k == "laser":
                 charge = w.get("charge", 0) or 0
@@ -588,6 +599,8 @@ class Bot:
             return norm2(ax + 0.6 * cx, ay + 0.6 * cy), me["energy"] > 40
         d = math.dist(cp, (x, y))
         if d < 2.5:
+            if FLAG_KITE_HEAL and not self.visible_now and me["hp"] < me["max_hp"] * 0.95:
+                return (0.0, 0.0), False
             return self.strafe(me, threats[0][1], t, 0.5), False
         dirv = norm2(cp[0] - x, cp[1] - y)
         return dirv, me["energy"] > 35
@@ -646,6 +659,8 @@ class Bot:
                 want = 28
             if target and target[0] == "mech" and target[1].get("hp", 1400) <= 0.3 * target[1].get("max_hp", 1400):
                 want = 28 if has_ltg else 55
+            if FLAG_LTG_FIRST:
+                want = 28 if has_ltg else (85 if has_las else FIGHT_RANGE)
         ax, ay = norm2(tp[0] - x, tp[1] - y)
         sx, sy = self.strafe(me, tp, t)
         if d > want + 15:
@@ -787,6 +802,26 @@ class Bot:
             pref = WEAPON_PREF.get(p["kind"], -1)
             if pref > cur_pref and (best is None or pref > WEAPON_PREF[best["kind"]]):
                 best = p
+        if V4 and FLAG_LTG_FIRST:
+            # loadout goal gun + lightning; laser only as a stand-in until lightning is found
+            weapons = me["weapons"]
+            for p in obs.get("pickups", []):
+                if p["kind"] not in ("laser", "lightning") or p["kind"] in held:
+                    continue
+                if math.dist(p["pos"][:2], (x, y)) > reach - 0.3 or abs(p["pos"][2] - z) > 3.8:
+                    continue
+                if p["kind"] == "laser" and "lightning" in held:
+                    continue
+                if None in weapons:
+                    return {"take": p["id"]}
+                for si, w in enumerate(weapons):  # replace mortar first, then the laser (never the gun)
+                    if w and w["kind"] == "mortar":
+                        return {"take": p["id"], "drop": si}
+                if p["kind"] == "lightning":
+                    for si, w in enumerate(weapons):
+                        if w and w["kind"] == "laser" and not (w.get("charge") or 0) > 0:
+                            return {"take": p["id"], "drop": si}
+            return None
         if V4:
             # loadout goal laser + lightning: fill an empty slot, else replace the gun or a mortar
             weapons = me["weapons"]
