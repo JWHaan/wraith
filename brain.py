@@ -897,7 +897,7 @@ class Brain:
                 bc = None
                 for c in self.cubes.values():
                     d = math.hypot(c["pos"][0] - x, c["pos"][1] - y)
-                    if d < r:
+                    if d < r and abs(c["pos"][2] - zf) < 4:
                         r, bc = d, c["pos"]
                 if bc is not None:
                     mx, my = self.travel(me, bc[0], bc[1])
